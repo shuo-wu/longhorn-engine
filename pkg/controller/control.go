@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -66,6 +67,12 @@ type Controller struct {
 	lastExpansionError string
 
 	fileSyncHTTPClientTimeout int
+
+	MaxConcurrentWrite atomic.Int32
+	MaxConcurrentRead  atomic.Int32
+
+	ConcurrentWrite atomic.Int32
+	ConcurrentRead  atomic.Int32
 }
 
 const (
@@ -1032,6 +1039,14 @@ func (c *Controller) Start(volumeSize, volumeCurrentSize int64, addresses ...str
 
 func (c *Controller) WriteAt(b []byte, off int64) (int, error) {
 	c.RLock()
+
+	c.ConcurrentWrite.Add(1)
+	defer c.ConcurrentWrite.Add(-1)
+	if c.MaxConcurrentWrite.Load() < c.ConcurrentWrite.Load() {
+		c.MaxConcurrentWrite.Store(c.ConcurrentWrite.Load())
+		logrus.Infof("Controller max concurrent write %v", c.MaxConcurrentWrite.Load())
+	}
+
 	l := len(b)
 	if off < 0 || off+int64(l) > c.size {
 		err := fmt.Errorf("EOF: Write of %v bytes at offset %v is beyond volume size %v", l, off, c.size)
@@ -1094,6 +1109,14 @@ func (c *Controller) writeInNormalMode(b []byte, off int64) (int, error) {
 
 func (c *Controller) ReadAt(b []byte, off int64) (int, error) {
 	c.RLock()
+
+	c.ConcurrentRead.Add(1)
+	defer c.ConcurrentRead.Add(-1)
+	if c.MaxConcurrentRead.Load() < c.ConcurrentRead.Load() {
+		c.MaxConcurrentRead.Store(c.ConcurrentRead.Load())
+		logrus.Infof("Controller max concurrent read %v", c.MaxConcurrentRead.Load())
+	}
+
 	l := len(b)
 	if off < 0 || off+int64(l) > c.size {
 		err := fmt.Errorf("EOF: Read of %v bytes at offset %v is beyond volume size %v", l, off, c.size)
