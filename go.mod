@@ -4,6 +4,8 @@ go 1.23.0
 
 toolchain go1.23.6
 
+replace github.com/longhorn/go-iscsi-helper => github.com/shuo-wu/go-iscsi-helper v0.0.0-20260813013030-f1e9c7ab5ac9
+
 require (
 	github.com/docker/go-units v0.5.0
 	github.com/gofrs/flock v0.12.1
