@@ -1,7 +1,9 @@
 FROM registry.suse.com/bci/golang:1.23
 
 ARG DAPPER_HOST_ARCH
-ARG SRC_BRANCH=main
+# dep-versions has no "main" branch; the value computed by the Makefile for this
+# release line is v1.8.x, so use it as the default for direct `docker build` runs.
+ARG SRC_BRANCH=v1.8.x
 ARG SRC_TAG
 ARG http_proxy
 ARG https_proxy
@@ -20,26 +22,36 @@ ENV SRC_BRANCH ${SRC_BRANCH}
 ENV SRC_TAG ${SRC_TAG}
 
 ENV GOLANGCI_LINT_VERSION="v1.60.3"
-ENV LONGHORN_INSTANCE_MANAGER_BRANCH="master"
+# Pin to the tag matching this release branch. The moving "master" branch (and
+# even v1.8.x) now requires a newer Go than this image's Go 1.23, so building it
+# here fails with "go.mod requires go >= 1.xx".
+ENV LONGHORN_INSTANCE_MANAGER_BRANCH="v1.8.1"
 
 WORKDIR ${DAPPER_SOURCE}
 ENTRYPOINT ["./scripts/entry"]
 CMD ["ci"]
 
-RUN zypper -n addrepo --refresh https://download.opensuse.org/repositories/system:/snappy/SLE_15/system:snappy.repo && \
-    zypper --gpg-auto-import-keys ref
+RUN for i in {1..10}; do \
+        zypper -n addrepo --refresh https://download.opensuse.org/repositories/system:/snappy/SLE_15/system:snappy.repo && \
+        zypper --gpg-auto-import-keys ref && break || sleep 1; \
+    done
 
 RUN if [ ${ARCH} == "amd64" ]; then \
     zypper -n install autoconf libtool libunwind-devel; \
     fi
 
 # TODO: use default python3 if SLE upgrade system python version to python3.11
+# NOTE: libexpat1 must be upgraded together with python311. The base image ships
+# libexpat1 2.6.4, but the current python311 package is built against expat 2.7.x,
+# so pyexpat fails to load with "undefined symbol:
+# XML_SetAllocTrackerActivationThreshold" and every pip3 invocation crashes.
 RUN zypper -n install cmake curl git less file gcc python311 python311-pip python311-devel \
     libkmod-devel libnl3-devel linux-glibc-devel pkg-config psmisc qemu-tools fuse \
     bash-completion librdmacm1 librdmacm-utils libibverbs xsltproc docbook-xsl-stylesheets \
     perl-Config-General libaio-devel glibc-devel-static glibc-devel sg3_utils iptables libltdl7 \
     libdevmapper1_03 iproute2 jq unzip zlib-devel zlib-devel-static \
     rpm-build rdma-core-devel gcc-c++ docker open-iscsi && \
+    zypper -n update libexpat1 && \
     rm -rf /var/cache/zypp/*
 
 # Install golangci-lint
@@ -52,8 +64,8 @@ ENV MINIO_URL_amd64=https://dl.min.io/server/minio/release/linux-amd64/archive/m
 RUN curl -sSfL ${!MINIO_URL} -o /usr/bin/minio && chmod +x /usr/bin/minio
 
 # Install libqcow
-RUN curl -sSfL https://s3-us-west-1.amazonaws.com/rancher-longhorn/libqcow-alpha-20181117.tar.gz | tar xvzf - -C /usr/src && \
-    cd /usr/src/libqcow-20181117 && \
+RUN curl -sSfL https://github.com/longhorn/libqcow/archive/refs/tags/v1.0.0.tar.gz | tar xvzf - -C /usr/src && \
+    cd /usr/src/libqcow-1.0.0 && \
     ./configure && \
     make -j$(nproc) && \
     make install && \
@@ -68,7 +80,7 @@ RUN curl -sSfL ${!GRPC_HEALTH_PROBE} -o /usr/local/bin/grpc_health_probe && \
     chmod +x /usr/local/bin/grpc_health_probe
 
 # TODO: use default python3 if SLE upgrade system python version to python3.11
-RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 & \
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
     ln -sf /usr/bin/pip3.11 /usr/bin/pip3 && \
     pip3 install grpcio==1.58.0 grpcio_tools==1.58.0 protobuf==${PROTOBUF_VER_PY}
 
@@ -95,7 +107,7 @@ RUN mkdir integration/
 COPY integration/setup.py integration/tox.ini integration/requirements.txt integration/flake8-requirements.txt integration/
 
 RUN cd integration && \
-    pip3 install tox==4.11.3; \
+    pip3 install tox==4.11.3 && \
     tox --notest
 
 # Build longhorn-instance-manager for integration testing
